@@ -6,12 +6,36 @@
 //
 
 import SwiftUI
+import FirebaseCore
 
 @main
 struct TappApp: App {
+    @State private var authStore: AuthStore
+
+    init() {
+        FirebaseApp.configure()
+        _authStore = State(initialValue: AuthStore())
+    }
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
+                .environment(authStore)
+        }
+    }
+}
+
+private struct RootView: View {
+    @Environment(AuthStore.self) private var authStore
+
+    var body: some View {
+        switch authStore.state {
+        case .loading:
+            ProgressView()
+        case .signedOut:
+            SignupView()
+        case .signedIn(let profile):
+            TalliesView(profile: profile)
         }
     }
 }

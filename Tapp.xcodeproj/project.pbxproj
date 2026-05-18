@@ -6,6 +6,12 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		B286AEA02FBB903E0024F52C /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = B286AE9F2FBB903E0024F52C /* FirebaseAuth */; };
+		B286AEA22FBB90470024F52C /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = B286AEA12FBB90470024F52C /* FirebaseCore */; };
+		B286AEA42FBB904F0024F52C /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = B286AEA32FBB904F0024F52C /* FirebaseFirestore */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		B2BA39632ECBF9F900C3B9E0 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +58,9 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B286AEA22FBB90470024F52C /* FirebaseCore in Frameworks */,
+				B286AEA02FBB903E0024F52C /* FirebaseAuth in Frameworks */,
+				B286AEA42FBB904F0024F52C /* FirebaseFirestore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -72,12 +81,20 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		B286AE9E2FBB903E0024F52C /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		B2BA394C2ECBF9F700C3B9E0 = {
 			isa = PBXGroup;
 			children = (
 				B2BA39572ECBF9F700C3B9E0 /* Tapp */,
 				B2BA39652ECBF9F900C3B9E0 /* TappTests */,
 				B2BA396F2ECBF9F900C3B9E0 /* TappUITests */,
+				B286AE9E2FBB903E0024F52C /* Frameworks */,
 				B2BA39562ECBF9F700C3B9E0 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -112,6 +129,9 @@
 			);
 			name = Tapp;
 			packageProductDependencies = (
+				B286AE9F2FBB903E0024F52C /* FirebaseAuth */,
+				B286AEA12FBB90470024F52C /* FirebaseCore */,
+				B286AEA32FBB904F0024F52C /* FirebaseFirestore */,
 			);
 			productName = Tapp;
 			productReference = B2BA39552ECBF9F700C3B9E0 /* Tapp.app */;
@@ -195,6 +215,9 @@
 			);
 			mainGroup = B2BA394C2ECBF9F700C3B9E0;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				B286AE772FBB8AF90024F52C /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = B2BA39562ECBF9F700C3B9E0 /* Products */;
 			projectDirPath = "";
@@ -410,7 +433,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "--31-22.Tapp";
+				PRODUCT_BUNDLE_IDENTIFIER = com.iambenross.tapp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -442,7 +465,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "--31-22.Tapp";
+				PRODUCT_BUNDLE_IDENTIFIER = com.iambenross.tapp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -464,7 +487,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.1;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "--31-22.TappTests";
+				PRODUCT_BUNDLE_IDENTIFIER = com.iambenross.tappTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -486,7 +509,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.1;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "--31-22.TappTests";
+				PRODUCT_BUNDLE_IDENTIFIER = com.iambenross.tappTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -506,7 +529,7 @@
 				DEVELOPMENT_TEAM = HSQJ946X8B;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "--31-22.TappUITests";
+				PRODUCT_BUNDLE_IDENTIFIER = com.iambenross.tappUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -526,7 +549,7 @@
 				DEVELOPMENT_TEAM = HSQJ946X8B;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "--31-22.TappUITests";
+				PRODUCT_BUNDLE_IDENTIFIER = com.iambenross.tappUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -578,6 +601,35 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		B286AE772FBB8AF90024F52C /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 12.13.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		B286AE9F2FBB903E0024F52C /* FirebaseAuth */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B286AE772FBB8AF90024F52C /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAuth;
+		};
+		B286AEA12FBB90470024F52C /* FirebaseCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B286AE772FBB8AF90024F52C /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseCore;
+		};
+		B286AEA32FBB904F0024F52C /* FirebaseFirestore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B286AE772FBB8AF90024F52C /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseFirestore;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = B2BA394D2ECBF9F700C3B9E0 /* Project object */;
 }
