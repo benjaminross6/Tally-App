@@ -11,63 +11,60 @@ struct SignupView: View {
     @Environment(AuthStore.self) private var authStore
 
     @State private var name: String = ""
+    @State private var username: String = ""
     @State private var email: String = ""
-    @State private var showingError: Bool = false
-    @State private var errorMessage: String = ""
+    @State private var errorMessage: String?
     @State private var isSubmitting: Bool = false
-    
+    @State private var showingLogin: Bool = false
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 24) {
-                // App branding
                 VStack(spacing: 8) {
                     Text("Tapp")
                         .font(.system(size: 48, weight: .bold))
                         .foregroundStyle(.primary)
-                    
+
                     Text("Join the Tapp Party Today!")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
                 .padding(.top, 60)
-                .padding(.bottom, 40)
-                
-                // Signup form
-                VStack(spacing: 20) {
-                    // Name field
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Name")
-                            .font(.headline)
-                            .foregroundStyle(.primary)
-                        
-                        TextField("Enter your name", text: $name)
+                .padding(.bottom, 24)
+
+                VStack(spacing: 16) {
+                    LabeledField(label: "Name") {
+                        TextField("Your name", text: $name)
                             .textFieldStyle(.roundedBorder)
                             .textInputAutocapitalization(.words)
                             .autocorrectionDisabled()
                     }
-                    
-                    // Email field
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Email")
-                            .font(.headline)
-                            .foregroundStyle(.primary)
-                        
-                        TextField("Enter your email", text: $email)
+
+                    LabeledField(label: "Username") {
+                        TextField("3-20 chars, a-z, 0-9, _", text: $username)
+                            .textFieldStyle(.roundedBorder)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .onChange(of: username) { _, newValue in
+                                username = UsernameClaim.sanitize(newValue)
+                            }
+                    }
+
+                    LabeledField(label: "Email") {
+                        TextField("you@example.com", text: $email)
                             .textFieldStyle(.roundedBorder)
                             .keyboardType(.emailAddress)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                     }
-                    
-                    // Error message
-                    if showingError {
+
+                    if let errorMessage {
                         Text(errorMessage)
                             .font(.caption)
                             .foregroundStyle(.red)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    
-                    // Submit button
+
                     Button(action: handleSignup) {
                         Group {
                             if isSubmitting {
@@ -75,7 +72,7 @@ struct SignupView: View {
                                     .progressViewStyle(.circular)
                                     .tint(.white)
                             } else {
-                                Text("Sign Up")
+                                Text("Send Sign-Up Link")
                                     .font(.headline)
                                     .foregroundStyle(.white)
                             }
@@ -87,62 +84,61 @@ struct SignupView: View {
                     }
                     .disabled(!isFormValid || isSubmitting)
                     .padding(.top, 8)
+
+                    Button("Already have an account? Log in") {
+                        showingLogin = true
+                    }
+                    .font(.footnote)
+                    .padding(.top, 4)
                 }
                 .padding(.horizontal, 32)
-                
+
                 Spacer()
             }
             .navigationBarHidden(true)
+            .sheet(isPresented: $showingLogin) {
+                LoginView()
+                    .environment(authStore)
+            }
         }
     }
-    
+
     private var isFormValid: Bool {
-        !name.trimmingCharacters(in: .whitespaces).isEmpty &&
-        !email.trimmingCharacters(in: .whitespaces).isEmpty &&
-        isValidEmail(email)
+        !name.trimmingCharacters(in: .whitespaces).isEmpty
+            && UsernameClaim.isWellFormed(username)
+            && isValidEmail(email)
     }
-    
+
     private func isValidEmail(_ email: String) -> Bool {
-        let emailRegex = "[A-Z0-9a-z._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,64}"
-        let emailPredicate = NSPredicate(format: "SELF MATCHES %@", emailRegex)
-        return emailPredicate.evaluate(with: email)
+        let regex = "[A-Z0-9a-z._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,64}"
+        return NSPredicate(format: "SELF MATCHES %@", regex)
+            .evaluate(with: email.trimmingCharacters(in: .whitespaces))
     }
-    
+
     private func handleSignup() {
-        showingError = false
-        errorMessage = ""
-
-        let trimmedName = name.trimmingCharacters(in: .whitespaces)
-        let trimmedEmail = email.trimmingCharacters(in: .whitespaces)
-
-        if trimmedName.isEmpty {
-            errorMessage = "Please enter your name"
-            showingError = true
-            return
-        }
-
-        if trimmedEmail.isEmpty {
-            errorMessage = "Please enter your email"
-            showingError = true
-            return
-        }
-
-        if !isValidEmail(trimmedEmail) {
-            errorMessage = "Please enter a valid email address"
-            showingError = true
-            return
-        }
-
+        errorMessage = nil
         isSubmitting = true
         Task {
             do {
-                try await authStore.signUp(name: trimmedName, email: trimmedEmail)
-                // RootView observes AuthStore.state and will navigate automatically.
+                try await authStore.sendSignupLink(name: name, username: username, email: email)
             } catch {
                 errorMessage = error.localizedDescription
-                showingError = true
             }
             isSubmitting = false
+        }
+    }
+}
+
+private struct LabeledField<Field: View>: View {
+    let label: String
+    @ViewBuilder var field: Field
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(.headline)
+                .foregroundStyle(.primary)
+            field
         }
     }
 }
@@ -151,4 +147,3 @@ struct SignupView: View {
     SignupView()
         .environment(AuthStore())
 }
-

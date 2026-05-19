@@ -21,6 +21,10 @@ struct TappApp: App {
         WindowGroup {
             RootView()
                 .environment(authStore)
+                .onOpenURL { url in
+                    guard EmailLinkHandler.canHandle(url) else { return }
+                    Task { await authStore.completeSignIn(with: url) }
+                }
         }
     }
 }
@@ -34,6 +38,8 @@ private struct RootView: View {
             ProgressView()
         case .signedOut:
             SignupView()
+        case .awaitingEmailLink(let email, let isSignup):
+            AwaitingLinkView(email: email, isSignup: isSignup)
         case .signedIn(let profile):
             TalliesView(profile: profile)
         }
