@@ -230,6 +230,13 @@ struct FullScreenTallyView: View {
 
     private var bottomButtonRow: some View {
         HStack(spacing: 24) {
+            circleButton(
+                systemImage: store.isPinned(tallyId) ? "pin.fill" : "pin",
+                label: store.isPinned(tallyId) ? "Unpin from home" : "Pin on home"
+            ) {
+                store.togglePin(tallyId: tallyId)
+            }
+
             circleButton(systemImage: "paintpalette.fill", label: "Color") {
                 showingColor = true
             }

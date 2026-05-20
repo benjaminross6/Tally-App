@@ -12,7 +12,8 @@ struct SignupView: View {
 
     @State private var name: String = ""
     @State private var username: String = ""
-    @State private var email: String = ""
+    @State private var password: String = ""
+    @State private var confirmPassword: String = ""
     @State private var errorMessage: String?
     @State private var isSubmitting: Bool = false
     @State private var showingLogin: Bool = false
@@ -50,10 +51,16 @@ struct SignupView: View {
                             }
                     }
 
-                    LabeledField(label: "Email") {
-                        TextField("you@example.com", text: $email)
+                    LabeledField(label: "Password") {
+                        SecureField("At least 6 characters", text: $password)
                             .textFieldStyle(.roundedBorder)
-                            .keyboardType(.emailAddress)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    }
+
+                    LabeledField(label: "Confirm password") {
+                        SecureField("Repeat password", text: $confirmPassword)
+                            .textFieldStyle(.roundedBorder)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                     }
@@ -72,7 +79,7 @@ struct SignupView: View {
                                     .progressViewStyle(.circular)
                                     .tint(.white)
                             } else {
-                                Text("Send Sign-Up Link")
+                                Text("Create Account")
                                     .font(.headline)
                                     .foregroundStyle(.white)
                             }
@@ -106,13 +113,8 @@ struct SignupView: View {
     private var isFormValid: Bool {
         !name.trimmingCharacters(in: .whitespaces).isEmpty
             && UsernameClaim.isWellFormed(username)
-            && isValidEmail(email)
-    }
-
-    private func isValidEmail(_ email: String) -> Bool {
-        let regex = "[A-Z0-9a-z._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,64}"
-        return NSPredicate(format: "SELF MATCHES %@", regex)
-            .evaluate(with: email.trimmingCharacters(in: .whitespaces))
+            && password.count >= 6
+            && password == confirmPassword
     }
 
     private func handleSignup() {
@@ -120,7 +122,7 @@ struct SignupView: View {
         isSubmitting = true
         Task {
             do {
-                try await authStore.sendSignupLink(name: name, username: username, email: email)
+                try await authStore.signUp(name: name, username: username, password: password)
             } catch {
                 errorMessage = error.localizedDescription
             }

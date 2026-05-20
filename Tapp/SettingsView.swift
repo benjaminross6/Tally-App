@@ -25,7 +25,7 @@ struct SettingsView: View {
     @State private var editingField: EditableField?
 
     private enum EditableField: String, Identifiable {
-        case username, name, email
+        case username, name, password
         var id: String { rawValue }
     }
 
@@ -117,8 +117,8 @@ struct SettingsView: View {
             settingRow(label: "Name", value: currentProfile.name) {
                 editingField = .name
             }
-            settingRow(label: "Email", value: currentProfile.email) {
-                editingField = .email
+            settingRow(label: "Password", value: "••••••••") {
+                editingField = .password
             }
         }
     }
@@ -239,14 +239,9 @@ struct SettingsView: View {
             ) { newValue in
                 try await authStore.changeName(newValue)
             }
-        case .email:
-            InlineEditorSheet(
-                title: "Change email",
-                placeholder: "you@example.com",
-                initial: currentProfile.email,
-                helpText: "We'll email a verification link to the new address."
-            ) { newValue in
-                try await authStore.changeEmail(newValue)
+        case .password:
+            PasswordEditorSheet { newPassword in
+                try await authStore.changePassword(newPassword)
             }
         }
     }
@@ -464,6 +459,76 @@ private struct InlineEditorSheet: View {
         Task {
             do {
                 try await onSave(value)
+                dismiss()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isSaving = false
+        }
+    }
+}
+
+private struct PasswordEditorSheet: View {
+    let onSave: (String) async throws -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var password: String = ""
+    @State private var confirmPassword: String = ""
+    @State private var errorMessage: String?
+    @State private var isSaving: Bool = false
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                SecureField("New password", text: $password)
+                    .textFieldStyle(.roundedBorder)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+
+                SecureField("Confirm password", text: $confirmPassword)
+                    .textFieldStyle(.roundedBorder)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+
+                Text("At least 6 characters.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+
+                Spacer()
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 16)
+            .navigationTitle("Change password")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Save") { save() }
+                        .bold()
+                        .disabled(isSaving || !isValid)
+                }
+            }
+        }
+    }
+
+    private var isValid: Bool {
+        password.count >= 6 && password == confirmPassword
+    }
+
+    private func save() {
+        isSaving = true
+        errorMessage = nil
+        Task {
+            do {
+                try await onSave(password)
                 dismiss()
             } catch {
                 errorMessage = error.localizedDescription

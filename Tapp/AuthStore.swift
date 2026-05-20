@@ -11,22 +11,28 @@ import FirebaseAuth
 import FirebaseCore
 import FirebaseFirestore
 
+/// Firebase Auth requires an email address. We synthesize one from the username so
+/// users only ever see username + password in the UI.
+enum AuthCredentials {
+    static let emailDomain = "tapp.users"
+
+    static func email(for username: String) -> String {
+        "\(UsernameClaim.sanitize(username))@\(emailDomain)"
+    }
+}
+
 @Observable
 final class AuthStore {
     enum State {
         case loading
         case signedOut
-        case awaitingEmailLink(email: String, isSignup: Bool)
         case signedIn(UserProfile)
     }
 
     private(set) var state: State = .loading
 
-    /// Set by `EmailLinkHandler` callers after a sign-in error so the UI can surface it.
-    var lastLinkError: String?
-
     private var authListener: AuthStateDidChangeListenerHandle?
-    private var isCompletingLink = false
+    private var isPerformingAccountSetup = false
 
     init() {
         guard FirebaseApp.app() != nil else {
@@ -47,154 +53,57 @@ final class AuthStore {
         }
     }
 
-    // MARK: - Signup / Login (Email-Link)
+    // MARK: - Signup / Login
 
-    /// Sends a sign-up email link. Validates and reserves intent locally; the actual
-    /// user doc + username claim happen when the link is opened.
-    func sendSignupLink(name: String, username: String, email: String) async throws {
+    func signUp(name: String, username: String, password: String) async throws {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let cleanUsername = UsernameClaim.sanitize(username)
+        let authEmail = AuthCredentials.email(for: cleanUsername)
 
         guard !trimmedName.isEmpty else { throw AuthError.invalidName }
         guard UsernameClaim.isWellFormed(cleanUsername) else { throw UsernameClaimError.invalidFormat }
-        guard isValidEmail(trimmedEmail) else { throw AuthError.invalidEmail }
+        guard isValidPassword(password) else { throw AuthError.invalidPassword }
 
         if let existingUid = try await UsernameClaim.ownerUid(of: cleanUsername),
            existingUid != Auth.auth().currentUser?.uid {
             throw UsernameClaimError.alreadyTaken
         }
 
-        try await Auth.auth().sendSignInLink(
-            toEmail: trimmedEmail,
-            actionCodeSettings: EmailLinkHandler.actionCodeSettings()
-        )
+        isPerformingAccountSetup = true
+        defer { isPerformingAccountSetup = false }
 
-        EmailLinkStore.savePendingSignup(
-            PendingSignup(name: trimmedName, username: cleanUsername, email: trimmedEmail)
-        )
+        let result = try await Auth.auth().createUser(withEmail: authEmail, password: password)
+        let uid = result.user.uid
 
-        state = .awaitingEmailLink(email: trimmedEmail, isSignup: true)
+        try await ensureUserDoc(
+            uid: uid,
+            name: trimmedName,
+            username: cleanUsername,
+            email: authEmail
+        )
+        try await claimUsername(cleanUsername, for: uid)
+
+        let profile = try await loadProfile(uid: uid)
+        state = .signedIn(profile)
     }
 
-    /// Sends a returning-user login link.
-    func sendLoginLink(email: String) async throws {
-        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard isValidEmail(trimmedEmail) else { throw AuthError.invalidEmail }
+    func signIn(username: String, password: String) async throws {
+        let cleanUsername = UsernameClaim.sanitize(username)
+        guard UsernameClaim.isWellFormed(cleanUsername) else { throw UsernameClaimError.invalidFormat }
+        guard !password.isEmpty else { throw AuthError.invalidPassword }
 
-        try await Auth.auth().sendSignInLink(
-            toEmail: trimmedEmail,
-            actionCodeSettings: EmailLinkHandler.actionCodeSettings()
-        )
-
-        EmailLinkStore.savePendingLoginEmail(trimmedEmail)
-        state = .awaitingEmailLink(email: trimmedEmail, isSignup: false)
-    }
-
-    /// Completes sign-in from a link pasted out of the email. Use this when
-    /// Universal Links aren't available (e.g. free Apple Personal Team).
-    @MainActor
-    func completeSignIn(withPastedLink raw: String) async {
-        lastLinkError = nil
-        let trimmed = raw
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .components(separatedBy: .whitespacesAndNewlines)
-            .joined()
-        guard !trimmed.isEmpty else {
-            lastLinkError = "Paste the full link from your email."
-            return
-        }
-        guard Auth.auth().isSignIn(withEmailLink: trimmed) else {
-            lastLinkError = "That doesn't look like a sign-in link from your email."
-            return
-        }
-        guard let url = URL(string: trimmed) else {
-            lastLinkError = "Couldn't read that link."
-            return
-        }
-        await completeSignIn(with: url)
-    }
-
-    /// Completes sign-in for an opened email link.
-    @MainActor
-    func completeSignIn(with url: URL) async {
-        let linkString = url.absoluteString
-        guard Auth.auth().isSignIn(withEmailLink: linkString) else {
-            lastLinkError = "That doesn't look like a sign-in link from your email."
-            return
-        }
-        guard let email = EmailLinkStore.pendingLoginEmail else {
-            lastLinkError = "We couldn't find the email this link was sent to on this device."
-            return
-        }
-
-        let awaitingContext: (email: String, isSignup: Bool)? = {
-            if case .awaitingEmailLink(let e, let s) = state { return (e, s) }
-            return nil
-        }()
-
-        isCompletingLink = true
-        defer { isCompletingLink = false }
-
+        let syntheticEmail = AuthCredentials.email(for: cleanUsername)
         do {
-            try await withTimeout(seconds: 30) { [self] in
-                let result = try await Auth.auth().signIn(withEmail: email, link: linkString)
-                let uid = result.user.uid
-
-                if let pending = EmailLinkStore.pendingSignup,
-                   pending.email.lowercased() == email.lowercased() {
-                    try await ensureUserDoc(
-                        uid: uid,
-                        name: pending.name,
-                        username: pending.username,
-                        email: pending.email
-                    )
-                    try await claimUsername(pending.username, for: uid)
-                    EmailLinkStore.clearPendingSignup()
-                }
-
-                let profile = try await loadProfile(uid: uid)
-                state = .signedIn(profile)
-            }
-        } catch is TimeoutError {
-            lastLinkError = "Sign-in timed out. Check your connection, tap Cancel, request a fresh link, and try again."
-            if let awaitingContext {
-                state = .awaitingEmailLink(
-                    email: awaitingContext.email,
-                    isSignup: awaitingContext.isSignup
-                )
-            }
+            _ = try await Auth.auth().signIn(withEmail: syntheticEmail, password: password)
+            return
         } catch {
-            lastLinkError = error.localizedDescription
-            if let awaitingContext {
-                state = .awaitingEmailLink(
-                    email: awaitingContext.email,
-                    isSignup: awaitingContext.isSignup
-                )
-            } else {
-                state = .signedOut
+            guard let uid = try await UsernameClaim.ownerUid(of: cleanUsername) else {
+                throw AuthError.wrongCredentials
             }
+            let profile = try await loadProfile(uid: uid)
+            guard !profile.email.isEmpty else { throw AuthError.wrongCredentials }
+            _ = try await Auth.auth().signIn(withEmail: profile.email, password: password)
         }
-    }
-
-    /// Writes `usernames/{name}` after the full user doc exists. Uses a plain write
-    /// instead of a transaction on first signup to avoid long retry loops.
-    private func claimUsername(_ rawUsername: String, for uid: String) async throws {
-        let username = UsernameClaim.sanitize(rawUsername)
-        let db = Firestore.firestore()
-        let usernameRef = db.collection("usernames").document(username)
-        let existing = try await usernameRef.getDocument()
-        if existing.exists, (existing.data()?["uid"] as? String) != uid {
-            throw UsernameClaimError.alreadyTaken
-        }
-        try await usernameRef.setData(["uid": uid])
-    }
-
-    /// Reset the in-progress link state, e.g. after the user backs out of
-    /// "Check your email."
-    func cancelPendingLink() {
-        EmailLinkStore.clearAll()
-        state = .signedOut
     }
 
     // MARK: - Account mutations
@@ -203,7 +112,6 @@ final class AuthStore {
         try Auth.auth().signOut()
     }
 
-    /// Updates the user's display name on the `users/{uid}` doc.
     func changeName(_ newName: String) async throws {
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed.count <= 40 else { throw AuthError.invalidName }
@@ -220,47 +128,35 @@ final class AuthStore {
         }
     }
 
-    /// Atomically renames the user, releasing the old `usernames/{oldName}` claim.
     func changeUsername(_ newUsername: String) async throws {
-        guard let uid = Auth.auth().currentUser?.uid else { throw AuthError.notSignedIn }
+        guard let user = Auth.auth().currentUser else { throw AuthError.notSignedIn }
         guard case .signedIn(var profile) = state else { throw AuthError.notSignedIn }
 
         let clean = UsernameClaim.sanitize(newUsername)
         guard UsernameClaim.isWellFormed(clean) else { throw UsernameClaimError.invalidFormat }
         guard clean != profile.displayUsername else { return }
 
-        try await UsernameClaim.rename(from: profile.displayUsername, to: clean, uid: uid)
-        profile.username = clean
-        state = .signedIn(profile)
-    }
+        try await UsernameClaim.rename(from: profile.displayUsername, to: clean, uid: user.uid)
 
-    /// Asks Firebase to send a verification link to the new address. The address
-    /// only changes on Firebase Auth's side after the user clicks the link. We
-    /// optimistically write the new address to the user doc so the UI updates
-    /// immediately.
-    func changeEmail(_ newEmail: String) async throws {
-        let trimmed = newEmail.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard isValidEmail(trimmed) else { throw AuthError.invalidEmail }
-        guard let user = Auth.auth().currentUser else { throw AuthError.notSignedIn }
-
-        try await user.sendEmailVerification(beforeUpdatingEmail: trimmed)
+        let newEmail = AuthCredentials.email(for: clean)
+        try? await user.updateEmail(to: newEmail)
 
         try await Firestore.firestore()
             .collection("users")
             .document(user.uid)
-            .updateData(["Email": trimmed])
+            .updateData(["Username": clean, "Email": newEmail])
 
-        if case .signedIn(var profile) = state {
-            profile.email = trimmed
-            state = .signedIn(profile)
-        }
+        profile.username = clean
+        profile.email = newEmail
+        state = .signedIn(profile)
     }
 
-    /// Cascades the deletion: removes ownership of every owned tally (deleting docs
-    /// and pulling the ref out of each shared friend's `Tallies`), removes the user
-    /// from every shared tally, removes the user from every friend's `Friends`,
-    /// releases the username claim, deletes the user doc, and finally deletes the
-    /// Firebase Auth user.
+    func changePassword(_ newPassword: String) async throws {
+        guard isValidPassword(newPassword) else { throw AuthError.invalidPassword }
+        guard let user = Auth.auth().currentUser else { throw AuthError.notSignedIn }
+        try await user.updatePassword(to: newPassword)
+    }
+
     func deleteAccount() async throws {
         guard let user = Auth.auth().currentUser else { throw AuthError.notSignedIn }
         let uid = user.uid
@@ -308,14 +204,11 @@ final class AuthStore {
 
         try? await userRef.delete()
         try await user.delete()
-        EmailLinkStore.clearAll()
     }
 
     // MARK: - Internal
 
     private func handleAuthChange(_ user: User?) async {
-        if isCompletingLink { return }
-
         guard let user else {
             state = .signedOut
             return
@@ -324,6 +217,8 @@ final class AuthStore {
         do {
             let profile = try await loadProfile(uid: user.uid)
             state = .signedIn(profile)
+        } catch AuthError.profileNotFound where isPerformingAccountSetup {
+            return
         } catch {
             try? Auth.auth().signOut()
             state = .signedOut
@@ -352,13 +247,11 @@ final class AuthStore {
             try? await userRef.updateData(needsBackfill)
         }
 
-        // Re-fetch after any backfill so decode sees the latest fields.
         let fresh = try await userRef.getDocument()
         guard fresh.exists else {
             throw AuthError.profileNotFound
         }
         var profile = try fresh.data(as: UserProfile.self)
-        // @DocumentID is not populated automatically when using custom CodingKeys.
         if profile.id == nil {
             profile.id = fresh.documentID
         }
@@ -388,18 +281,28 @@ final class AuthStore {
         ])
     }
 
-    private func isValidEmail(_ email: String) -> Bool {
-        let regex = "[A-Z0-9a-z._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,64}"
-        return NSPredicate(format: "SELF MATCHES %@", regex).evaluate(with: email)
+    private func claimUsername(_ rawUsername: String, for uid: String) async throws {
+        let username = UsernameClaim.sanitize(rawUsername)
+        let db = Firestore.firestore()
+        let usernameRef = db.collection("usernames").document(username)
+        let existing = try await usernameRef.getDocument()
+        if existing.exists, (existing.data()?["uid"] as? String) != uid {
+            throw UsernameClaimError.alreadyTaken
+        }
+        try await usernameRef.setData(["uid": uid])
+    }
+
+    private func isValidPassword(_ password: String) -> Bool {
+        password.count >= 6
     }
 }
 
 enum AuthError: LocalizedError {
     case profileNotFound
     case invalidName
-    case invalidEmail
+    case invalidPassword
+    case wrongCredentials
     case notSignedIn
-    case timedOut
 
     var errorDescription: String? {
         switch self {
@@ -407,30 +310,12 @@ enum AuthError: LocalizedError {
             return "Couldn't find your account. Please sign up again."
         case .invalidName:
             return "Please enter your name (up to 40 characters)."
-        case .invalidEmail:
-            return "Please enter a valid email address."
+        case .invalidPassword:
+            return "Passwords must be at least 6 characters."
+        case .wrongCredentials:
+            return "That username or password isn't right."
         case .notSignedIn:
             return "You're not signed in."
-        case .timedOut:
-            return "That took too long. Check your connection and try again."
         }
-    }
-}
-
-private struct TimeoutError: Error {}
-
-/// Runs `operation` on the main actor, failing with `TimeoutError` if it exceeds `seconds`.
-@MainActor
-private func withTimeout(seconds: TimeInterval, operation: @MainActor @escaping () async throws -> Void) async throws {
-    try await withThrowingTaskGroup(of: Void.self) { group in
-        group.addTask { @MainActor in
-            try await operation()
-        }
-        group.addTask {
-            try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-            throw TimeoutError()
-        }
-        try await group.next()
-        group.cancelAll()
     }
 }

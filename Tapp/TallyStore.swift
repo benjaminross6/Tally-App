@@ -18,13 +18,85 @@ final class TallyStore {
     let userRef: DocumentReference
     var currentUid: String { userRef.documentID }
 
+    var sortEnabled: Bool { preferences.sortEnabled }
+
+    private var preferences: TallyListPreferences
+    private var tallyById: [String: Tally] = [:]
     private var userListener: ListenerRegistration?
     private var tallyListeners: [String: ListenerRegistration] = [:]
 
     init(userId: String) {
         precondition(!userId.isEmpty, "TallyStore requires a non-empty user id")
         self.userRef = Firestore.firestore().collection("users").document(userId)
+        self.preferences = TallyListPreferences(userId: userId)
         startListening()
+    }
+
+    func isPinned(_ tallyId: String) -> Bool {
+        preferences.isPinned(tallyId)
+    }
+
+    /// Toggles "sort by most recently updated" and reorders once. List order stays
+    /// stable on tally updates until this is toggled again.
+    func toggleSort() {
+        preferences.sortEnabled.toggle()
+        rebuildDisplayOrder()
+    }
+
+    func togglePin(tallyId: String) {
+        preferences.togglePin(tallyId)
+        rebuildDisplayOrder()
+    }
+
+    /// Reorders ids for preview or commit. Pinned tallies cannot cross into the unpinned section.
+    func reorderedIds(draggedId: String, toIndex rawDestination: Int) -> [String]? {
+        guard !sortEnabled else { return nil }
+        var ids = tallies.compactMap(\.id)
+        guard let fromIndex = ids.firstIndex(of: draggedId) else { return nil }
+
+        let draggedPinned = preferences.isPinned(draggedId)
+        ids.remove(at: fromIndex)
+
+        var dest = rawDestination
+        if fromIndex < dest { dest -= 1 }
+        dest = max(0, min(dest, ids.count))
+
+        let pinnedCount = ids.filter { preferences.isPinned($0) }.count
+        if draggedPinned {
+            dest = min(dest, pinnedCount)
+        } else {
+            dest = max(dest, pinnedCount)
+        }
+
+        ids.insert(draggedId, at: dest)
+        return ids
+    }
+
+    func talliesPreview(draggedId: String, toIndex rawDestination: Int) -> [Tally] {
+        guard let ids = reorderedIds(draggedId: draggedId, toIndex: rawDestination) else {
+            return tallies
+        }
+        return ids.compactMap { tallyById[$0] }
+    }
+
+    /// Maps a drop slot in the list-without-dragged to the `toIndex` expected by `reorderedIds`.
+    func fullListInsertionIndex(draggedId: String, insertionWithoutDragged: Int) -> Int {
+        guard let from = tallies.firstIndex(where: { $0.id == draggedId }) else {
+            return insertionWithoutDragged
+        }
+        var ids = tallies.compactMap(\.id)
+        let dragged = ids.remove(at: from)
+        let slot = min(max(0, insertionWithoutDragged), ids.count)
+        ids.insert(dragged, at: slot)
+        guard let finalIndex = ids.firstIndex(of: dragged) else { return from }
+        return finalIndex > from ? finalIndex + 1 : finalIndex
+    }
+
+    func moveTally(draggedId: String, toIndex rawDestination: Int) {
+        guard let ids = reorderedIds(draggedId: draggedId, toIndex: rawDestination) else { return }
+        preferences.pinnedIds = ids.filter { preferences.isPinned($0) }
+        preferences.setManualOrder(ids.filter { !preferences.isPinned($0) })
+        tallies = ids.compactMap { tallyById[$0] }
     }
 
     deinit {
@@ -218,6 +290,8 @@ final class TallyStore {
         for id in currentIds.subtracting(newIds) {
             tallyListeners[id]?.remove()
             tallyListeners.removeValue(forKey: id)
+            tallyById.removeValue(forKey: id)
+            preferences.removeTally(id)
             tallies.removeAll { $0.id == id }
         }
 
@@ -240,14 +314,52 @@ final class TallyStore {
             tally.id = snapshot.documentID
         }
 
-        if let idx = tallies.firstIndex(where: { $0.id == tally.id }) {
+        guard let id = tally.id else { return }
+        let isNew = tallyById[id] == nil
+        tallyById[id] = tally
+
+        if isNew {
+            if !preferences.manualOrder.contains(id) && !preferences.isPinned(id) {
+                preferences.registerNewTally(id)
+            }
+            rebuildDisplayOrder()
+        } else if let idx = tallies.firstIndex(where: { $0.id == id }) {
             tallies[idx] = tally
         } else {
-            tallies.append(tally)
+            rebuildDisplayOrder()
         }
-        tallies.sort {
-            ($0.lastUpdated ?? $0.created ?? .distantPast)
-                > ($1.lastUpdated ?? $1.created ?? .distantPast)
+    }
+
+    private func rebuildDisplayOrder() {
+        let allIds = Set(tallyById.keys)
+        preferences.manualOrder = preferences.manualOrder.filter { allIds.contains($0) }
+        preferences.pinnedIds = preferences.pinnedIds.filter { allIds.contains($0) }
+
+        for id in allIds where !preferences.isPinned(id) && !preferences.manualOrder.contains(id) {
+            preferences.registerNewTally(id)
         }
+
+        if preferences.sortEnabled {
+            tallies = allIds
+                .compactMap { tallyById[$0] }
+                .sorted(by: sortComparator)
+        } else {
+            let pinned = preferences.pinnedIds.compactMap { tallyById[$0] }
+            let unpinned = preferences.manualOrder
+                .filter { !preferences.isPinned($0) && allIds.contains($0) }
+                .compactMap { tallyById[$0] }
+            let known = Set(preferences.pinnedIds + preferences.manualOrder)
+            let orphans = allIds.subtracting(known).compactMap { tallyById[$0] }
+            tallies = pinned + unpinned + orphans
+        }
+    }
+
+    private func sortComparator(_ lhs: Tally, _ rhs: Tally) -> Bool {
+        let lhsUpdated = lhs.lastUpdated ?? lhs.created ?? .distantPast
+        let rhsUpdated = rhs.lastUpdated ?? rhs.created ?? .distantPast
+        if lhsUpdated != rhsUpdated { return lhsUpdated > rhsUpdated }
+        let lhsCreated = lhs.created ?? .distantPast
+        let rhsCreated = rhs.created ?? .distantPast
+        return lhsCreated > rhsCreated
     }
 }

@@ -72,4 +72,10 @@ enum LocalTallyColors {
     static func backgroundTint(for tallyId: String) -> Color {
         color(for: tallyId).opacity(0.18)
     }
+
+    /// Palette preview matching the muted tint used on tally rows.
+    static func previewSwatchColor(for index: Int?) -> Color {
+        guard let index else { return Color.accentColor.opacity(0.18) }
+        return TallyColorPalette.swatches[index].opacity(0.18)
+    }
 }

@@ -2,7 +2,7 @@
 //  LoginView.swift
 //  Tapp
 //
-//  Returning-user screen: enter your email, get a sign-in link, tap it.
+//  Returning-user screen: username and password.
 //
 
 import SwiftUI
@@ -11,7 +11,8 @@ struct LoginView: View {
     @Environment(AuthStore.self) private var authStore
     @Environment(\.dismiss) private var dismiss
 
-    @State private var email: String = ""
+    @State private var username: String = ""
+    @State private var password: String = ""
     @State private var errorMessage: String?
     @State private var isSubmitting: Bool = false
 
@@ -21,7 +22,7 @@ struct LoginView: View {
                 VStack(spacing: 8) {
                     Text("Welcome back")
                         .font(.system(size: 32, weight: .bold))
-                    Text("Enter your email and we'll send you a sign-in link.")
+                    Text("Sign in with your username and password.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -30,9 +31,16 @@ struct LoginView: View {
                 .padding(.horizontal, 32)
 
                 VStack(spacing: 16) {
-                    TextField("you@example.com", text: $email)
+                    TextField("Username", text: $username)
                         .textFieldStyle(.roundedBorder)
-                        .keyboardType(.emailAddress)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .onChange(of: username) { _, newValue in
+                            username = UsernameClaim.sanitize(newValue)
+                        }
+
+                    SecureField("Password", text: $password)
+                        .textFieldStyle(.roundedBorder)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
 
@@ -43,22 +51,22 @@ struct LoginView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
-                    Button(action: handleSend) {
+                    Button(action: handleSignIn) {
                         Group {
                             if isSubmitting {
                                 ProgressView().tint(.white)
                             } else {
-                                Text("Send Sign-In Link")
+                                Text("Log In")
                                     .font(.headline)
                                     .foregroundStyle(.white)
                             }
                         }
                         .frame(maxWidth: .infinity)
                         .padding()
-                        .background(isValidEmail(email) && !isSubmitting ? Color.accentColor : Color.gray)
+                        .background(isFormValid && !isSubmitting ? Color.accentColor : Color.gray)
                         .cornerRadius(10)
                     }
-                    .disabled(!isValidEmail(email) || isSubmitting)
+                    .disabled(!isFormValid || isSubmitting)
                 }
                 .padding(.horizontal, 32)
 
@@ -72,18 +80,16 @@ struct LoginView: View {
         }
     }
 
-    private func isValidEmail(_ email: String) -> Bool {
-        let regex = "[A-Z0-9a-z._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,64}"
-        return NSPredicate(format: "SELF MATCHES %@", regex)
-            .evaluate(with: email.trimmingCharacters(in: .whitespaces))
+    private var isFormValid: Bool {
+        UsernameClaim.isWellFormed(username) && password.count >= 6
     }
 
-    private func handleSend() {
+    private func handleSignIn() {
         errorMessage = nil
         isSubmitting = true
         Task {
             do {
-                try await authStore.sendLoginLink(email: email)
+                try await authStore.signIn(username: username, password: password)
                 dismiss()
             } catch {
                 errorMessage = error.localizedDescription

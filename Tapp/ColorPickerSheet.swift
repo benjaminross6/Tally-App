@@ -64,8 +64,10 @@ struct ColorPickerSheet: View {
         } label: {
             VStack(spacing: 6) {
                 Circle()
-                    .fill(color(for: index))
+                    .fill(LocalTallyColors.previewSwatchColor(for: index))
                     .frame(width: 48, height: 48)
+                    .background(Color(.systemBackground))
+                    .clipShape(Circle())
                     .overlay(
                         Circle()
                             .stroke(Color.primary, lineWidth: isSelected ? 3 : 0)
@@ -78,10 +80,5 @@ struct ColorPickerSheet: View {
             }
         }
         .buttonStyle(.plain)
-    }
-
-    private func color(for index: Int?) -> Color {
-        guard let index else { return .accentColor }
-        return TallyColorPalette.swatches[index]
     }
 }
