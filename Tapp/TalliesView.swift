@@ -90,9 +90,6 @@ struct TalliesView: View {
                 }
 
             }
-            .overlay(alignment: .bottom) {
-                DragDebugPanel()
-            }
             .navigationBarHidden(true)
             .navigationDestination(isPresented: $openSettings) {
                 SettingsView(
@@ -120,12 +117,12 @@ struct TalliesView: View {
             Text(errorMessage ?? "")
         }
         .task {
-            dragLog.log("TalliesView appeared tallies=\(store.tallies.count)")
             await prewarmDirectory()
         }
         .onDisappear {
-            dragLog.log("TalliesView onDisappear — forcing endDrag")
-            endDrag()
+            if TappFeatures.manualReorderEnabled {
+                endDrag()
+            }
         }
     }
 
@@ -193,25 +190,24 @@ struct TalliesView: View {
             }
             .coordinateSpace(name: "tallyListContent")
             .overlay(alignment: .topLeading) {
-                dragDropIndicator
-                dragFloatingOverlay
+                if TappFeatures.manualReorderEnabled {
+                    dragDropIndicator
+                    dragFloatingOverlay
+                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
         }
-        .scrollDisabled(dragHandleActiveId != nil || draggingTallyId != nil)
+        .scrollDisabled(
+            TappFeatures.manualReorderEnabled
+                && (dragHandleActiveId != nil || draggingTallyId != nil)
+        )
         .onPreferenceChange(TallyRowFramePreferenceKey.self) { rowFrames = $0 }
         .overlay {
-            if draggingTallyId != nil {
+            if TappFeatures.manualReorderEnabled, draggingTallyId != nil {
                 Color.clear
                     .contentShape(Rectangle())
-                    .onTapGesture {
-                        dragLog.log("emergency tap — cancel drag")
-                        if let id = draggingTallyId {
-                            endDrag()
-                            _ = id
-                        }
-                    }
+                    .onTapGesture { endDrag() }
             }
         }
     }
@@ -263,11 +259,20 @@ struct TalliesView: View {
         let isGhostRow = draggingTallyId == tallyId
 
         HStack(spacing: 8) {
-            if !store.sortEnabled {
-                TallyDragHandleView(isPinned: store.isPinned(tallyId))
-                    .contentShape(Rectangle())
-                    .frame(minWidth: 36, minHeight: 44)
-                    .highPriorityGesture(dragHandleGesture(for: tallyId))
+            if !store.sortEnabled,
+               TappFeatures.manualReorderEnabled || store.isPinned(tallyId) {
+                let handle = TallyDragHandleView(
+                    isPinned: store.isPinned(tallyId),
+                    showsDragGrip: TappFeatures.manualReorderEnabled
+                )
+                .contentShape(Rectangle())
+                .frame(minWidth: 36, minHeight: 44)
+
+                if TappFeatures.manualReorderEnabled {
+                    handle.highPriorityGesture(dragHandleGesture(for: tallyId))
+                } else {
+                    handle
+                }
             }
             TallyRow(
                 tally: tally,
@@ -296,6 +301,7 @@ struct TalliesView: View {
     private func dragHandleGesture(for tallyId: String) -> some Gesture {
         DragGesture(minimumDistance: 0, coordinateSpace: .named("tallyListContent"))
             .onChanged { drag in
+                guard TappFeatures.manualReorderEnabled else { return }
                 if dragHandleActiveId == nil {
                     dragHandleActiveId = tallyId
                     dragHandleTouchStart = Date()
@@ -349,6 +355,7 @@ struct TalliesView: View {
                 }
             }
             .onEnded { drag in
+                guard TappFeatures.manualReorderEnabled else { return }
                 dragLog.log("touch ended tally=\(tallyId) armed=\(dragArmedTallyId ?? "nil") dragging=\(draggingTallyId ?? "nil")")
                 dragHandleActiveId = nil
                 dragHandleTouchStart = nil
@@ -603,6 +610,7 @@ private struct TallyRowFramePreferenceKey: PreferenceKey {
 
 private struct TallyDragHandleView: View {
     let isPinned: Bool
+    var showsDragGrip: Bool = true
 
     var body: some View {
         VStack(spacing: 6) {
@@ -611,14 +619,23 @@ private struct TallyDragHandleView: View {
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
-            Image(systemName: "line.3.horizontal")
-                .font(.body.weight(.semibold))
-                .foregroundStyle(.tertiary)
+            if showsDragGrip {
+                Image(systemName: "line.3.horizontal")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
         }
         .frame(width: 28)
         .padding(.vertical, 12)
         .contentShape(Rectangle())
-        .accessibilityLabel(isPinned ? "Drag pinned tally" : "Drag tally")
+        .accessibilityLabel(accessibilityText)
+    }
+
+    private var accessibilityText: String {
+        if showsDragGrip {
+            return isPinned ? "Drag pinned tally" : "Drag tally"
+        }
+        return "Pinned tally"
     }
 }
 
