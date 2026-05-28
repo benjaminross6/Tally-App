@@ -32,71 +32,10 @@ final class TallyStore {
         startListening()
     }
 
-    func isPinned(_ tallyId: String) -> Bool {
-        preferences.isPinned(tallyId)
-    }
-
-    /// Toggles "sort by most recently updated" and reorders once. List order stays
-    /// stable on tally updates until this is toggled again.
+    /// Toggles sort-by-last-updated and reorders the list once.
     func toggleSort() {
         preferences.sortEnabled.toggle()
         rebuildDisplayOrder()
-    }
-
-    func togglePin(tallyId: String) {
-        preferences.togglePin(tallyId)
-        rebuildDisplayOrder()
-    }
-
-    /// Reorders ids for preview or commit. Pinned tallies cannot cross into the unpinned section.
-    func reorderedIds(draggedId: String, toIndex rawDestination: Int) -> [String]? {
-        guard !sortEnabled else { return nil }
-        var ids = tallies.compactMap(\.id)
-        guard let fromIndex = ids.firstIndex(of: draggedId) else { return nil }
-
-        let draggedPinned = preferences.isPinned(draggedId)
-        ids.remove(at: fromIndex)
-
-        var dest = rawDestination
-        if fromIndex < dest { dest -= 1 }
-        dest = max(0, min(dest, ids.count))
-
-        let pinnedCount = ids.filter { preferences.isPinned($0) }.count
-        if draggedPinned {
-            dest = min(dest, pinnedCount)
-        } else {
-            dest = max(dest, pinnedCount)
-        }
-
-        ids.insert(draggedId, at: dest)
-        return ids
-    }
-
-    func talliesPreview(draggedId: String, toIndex rawDestination: Int) -> [Tally] {
-        guard let ids = reorderedIds(draggedId: draggedId, toIndex: rawDestination) else {
-            return tallies
-        }
-        return ids.compactMap { tallyById[$0] }
-    }
-
-    /// Maps a drop slot in the list-without-dragged to the `toIndex` expected by `reorderedIds`.
-    func fullListInsertionIndex(draggedId: String, insertionWithoutDragged: Int) -> Int {
-        guard let from = tallies.firstIndex(where: { $0.id == draggedId }) else {
-            return insertionWithoutDragged
-        }
-        var ids = tallies.compactMap(\.id)
-        let dragged = ids.remove(at: from)
-        let slot = min(max(0, insertionWithoutDragged), ids.count)
-        ids.insert(dragged, at: slot)
-        guard let finalIndex = ids.firstIndex(of: dragged) else { return from }
-        return finalIndex > from ? finalIndex + 1 : finalIndex
-    }
-
-    func moveTally(draggedId: String, toIndex rawDestination: Int) {
-        guard let ids = reorderedIds(draggedId: draggedId, toIndex: rawDestination) else { return }
-        preferences.pinnedIds = ids.filter { preferences.isPinned($0) }
-        preferences.setManualOrder(ids.filter { !preferences.isPinned($0) })
-        tallies = ids.compactMap { tallyById[$0] }
     }
 
     deinit {
@@ -126,16 +65,16 @@ final class TallyStore {
             "Permissions": initialPermissions,
             "Created": FieldValue.serverTimestamp(),
             "LastUpdated": FieldValue.serverTimestamp(),
-            "LastUpdatedBy": userRef
+            "LastUpdatedBy": userRef,
+            "FireworksEnabled": false,
+            "ResetSchedule": TallyResetSchedule.off
         ]
         try await newTallyRef.setData(data)
 
-        // Add to owner's tally list.
         try await userRef.updateData([
             "Tallies": FieldValue.arrayUnion([newTallyRef])
         ])
 
-        // Add to each shared friend's tally list.
         for friendRef in sharedRefs {
             try await friendRef.updateData([
                 "Tallies": FieldValue.arrayUnion([newTallyRef])
@@ -147,42 +86,56 @@ final class TallyStore {
 
     func increment(_ tally: Tally) async throws {
         guard let id = tally.id else { return }
-        try await Firestore.firestore()
-            .collection("tallies")
-            .document(id)
-            .updateData([
+        let ref = Firestore.firestore().collection("tallies").document(id)
+
+        if Self.isResetDue(tally) {
+            let resetCount = 0
+            var data = Self.scheduledResetFields(for: tally)
+            data["Count"] = resetCount + 1
+            data["LastUpdated"] = FieldValue.serverTimestamp()
+            data["LastUpdatedBy"] = userRef
+            try await ref.updateData(data)
+        } else {
+            try await ref.updateData([
                 "Count": FieldValue.increment(Int64(1)),
                 "LastUpdated": FieldValue.serverTimestamp(),
                 "LastUpdatedBy": userRef
             ])
+        }
     }
 
     func setCount(_ tally: Tally, to newCount: Int) async throws {
-        guard let id = tally.id else { return }
-        try await Firestore.firestore()
-            .collection("tallies")
-            .document(id)
-            .updateData([
-                "Count": newCount,
-                "LastUpdated": FieldValue.serverTimestamp(),
-                "LastUpdatedBy": userRef
-            ])
+        try await updateTally(tally, fields: ["Count": newCount])
     }
 
     func rename(_ tally: Tally, to newName: String) async throws {
-        guard let id = tally.id else { return }
-        try await Firestore.firestore()
-            .collection("tallies")
-            .document(id)
-            .updateData([
-                "Name": newName,
-                "LastUpdated": FieldValue.serverTimestamp(),
-                "LastUpdatedBy": userRef
-            ])
+        try await updateTally(tally, fields: ["Name": newName])
+    }
+
+    func setFireworksEnabled(_ tally: Tally, enabled: Bool) async throws {
+        try await updateTally(tally, fields: ["FireworksEnabled": enabled])
+    }
+
+    func resetCountNow(_ tally: Tally) async throws {
+        try await updateTally(tally, fields: ["Count": 0])
+    }
+
+    func clearResetSchedule(_ tally: Tally) async throws {
+        try await updateTally(tally, fields: [
+            "ResetSchedule": TallyResetSchedule.off,
+            "NextResetAt": FieldValue.delete()
+        ])
+    }
+
+    func setRecurringReset(_ tally: Tally, schedule: String) async throws {
+        guard let nextReset = TallyResetDates.initialNextReset(for: schedule) else { return }
+        try await updateTally(tally, fields: [
+            "ResetSchedule": schedule,
+            "NextResetAt": Timestamp(date: nextReset)
+        ])
     }
 
     /// Replaces the tally's `Shared With` array and `Permissions` map.
-    /// Also adds/removes the tally ref from each affected friend's `Tallies` list.
     func setPermissions(_ tally: Tally, permissions newPermissions: [String: String]) async throws {
         guard let id = tally.id else { return }
         let db = Firestore.firestore()
@@ -196,12 +149,11 @@ final class TallyStore {
 
         let newSharedRefs = newUids.map { db.collection("users").document($0) }
 
-        try await tallyRef.updateData([
+        var permissionData: [String: Any] = [
             "Permissions": newPermissions,
-            "Shared With": newSharedRefs,
-            "LastUpdated": FieldValue.serverTimestamp(),
-            "LastUpdatedBy": userRef
-        ])
+            "Shared With": newSharedRefs
+        ]
+        try await updateTally(tally, fields: permissionData, tallyRef: tallyRef)
 
         for uid in added {
             let ref = db.collection("users").document(uid)
@@ -218,8 +170,6 @@ final class TallyStore {
         }
     }
 
-    /// Owner-only: deletes the tally document and removes the ref from owner's and every
-    /// shared friend's `Tallies` array.
     func deleteTally(_ tally: Tally) async throws {
         guard let id = tally.id else { return }
         let db = Firestore.firestore()
@@ -236,8 +186,6 @@ final class TallyStore {
         try await tallyRef.delete()
     }
 
-    /// Non-owner: removes the tally from the current user's list and strips this user
-    /// from `Shared With` + `Permissions` on the tally.
     func removeFromMyList(_ tally: Tally) async throws {
         guard let id = tally.id else { return }
         let db = Firestore.firestore()
@@ -249,15 +197,51 @@ final class TallyStore {
 
         let newShared = tally.sharedRefs.filter { $0.documentID != uid }
 
-        try await tallyRef.updateData([
+        try await updateTally(tally, fields: [
             "Permissions": newPerms,
-            "Shared With": newShared,
-            "LastUpdated": FieldValue.serverTimestamp(),
-            "LastUpdatedBy": userRef
-        ])
+            "Shared With": newShared
+        ], tallyRef: tallyRef)
         try await userRef.updateData([
             "Tallies": FieldValue.arrayRemove([tallyRef])
         ])
+    }
+
+    // MARK: - Scheduled resets
+
+    private static func isResetDue(_ tally: Tally) -> Bool {
+        let schedule = tally.effectiveResetSchedule
+        guard schedule != TallyResetSchedule.off,
+              let nextResetAt = tally.nextResetAt else {
+            return false
+        }
+        return Date() >= nextResetAt
+    }
+
+    private static func scheduledResetFields(for tally: Tally) -> [String: Any] {
+        guard isResetDue(tally) else { return [:] }
+        let schedule = tally.effectiveResetSchedule
+        let previous = tally.nextResetAt ?? Date()
+        let rolled = TallyResetDates.rollForward(schedule: schedule, from: previous)
+        return [
+            "Count": 0,
+            "NextResetAt": Timestamp(date: rolled)
+        ]
+    }
+
+    private func updateTally(
+        _ tally: Tally,
+        fields: [String: Any],
+        tallyRef: DocumentReference? = nil
+    ) async throws {
+        guard let id = tally.id else { return }
+        let ref = tallyRef ?? Firestore.firestore().collection("tallies").document(id)
+
+        var data = Self.scheduledResetFields(for: tally)
+        data.merge(fields) { _, new in new }
+        data["LastUpdated"] = FieldValue.serverTimestamp()
+        data["LastUpdatedBy"] = userRef
+
+        try await ref.updateData(data)
     }
 
     // MARK: - Reads
@@ -319,9 +303,6 @@ final class TallyStore {
         tallyById[id] = tally
 
         if isNew {
-            if !preferences.manualOrder.contains(id) && !preferences.isPinned(id) {
-                preferences.registerNewTally(id)
-            }
             rebuildDisplayOrder()
         } else if let idx = tallies.firstIndex(where: { $0.id == id }) {
             tallies[idx] = tally
@@ -331,35 +312,25 @@ final class TallyStore {
     }
 
     private func rebuildDisplayOrder() {
-        let allIds = Set(tallyById.keys)
-        preferences.manualOrder = preferences.manualOrder.filter { allIds.contains($0) }
-        preferences.pinnedIds = preferences.pinnedIds.filter { allIds.contains($0) }
-
-        for id in allIds where !preferences.isPinned(id) && !preferences.manualOrder.contains(id) {
-            preferences.registerNewTally(id)
-        }
-
+        let allTallies = tallyById.values.map { $0 }
         if preferences.sortEnabled {
-            tallies = allIds
-                .compactMap { tallyById[$0] }
-                .sorted(by: sortComparator)
+            tallies = allTallies.sorted(by: lastUpdatedComparator)
         } else {
-            let pinned = preferences.pinnedIds.compactMap { tallyById[$0] }
-            let unpinned = preferences.manualOrder
-                .filter { !preferences.isPinned($0) && allIds.contains($0) }
-                .compactMap { tallyById[$0] }
-            let known = Set(preferences.pinnedIds + preferences.manualOrder)
-            let orphans = allIds.subtracting(known).compactMap { tallyById[$0] }
-            tallies = pinned + unpinned + orphans
+            tallies = allTallies.sorted(by: createdComparator)
         }
     }
 
-    private func sortComparator(_ lhs: Tally, _ rhs: Tally) -> Bool {
+    private func lastUpdatedComparator(_ lhs: Tally, _ rhs: Tally) -> Bool {
         let lhsUpdated = lhs.lastUpdated ?? lhs.created ?? .distantPast
         let rhsUpdated = rhs.lastUpdated ?? rhs.created ?? .distantPast
         if lhsUpdated != rhsUpdated { return lhsUpdated > rhsUpdated }
+        return createdComparator(lhs, rhs)
+    }
+
+    private func createdComparator(_ lhs: Tally, _ rhs: Tally) -> Bool {
         let lhsCreated = lhs.created ?? .distantPast
         let rhsCreated = rhs.created ?? .distantPast
-        return lhsCreated > rhsCreated
+        if lhsCreated != rhsCreated { return lhsCreated > rhsCreated }
+        return (lhs.id ?? "") < (rhs.id ?? "")
     }
 }

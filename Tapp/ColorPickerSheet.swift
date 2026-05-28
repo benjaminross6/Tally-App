@@ -80,5 +80,13 @@ struct ColorPickerSheet: View {
             }
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(swatchAccessibilityLabel(index: index, label: label))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private func swatchAccessibilityLabel(index: Int?, label: String?) -> String {
+        if let label { return label }
+        guard let index else { return "Default" }
+        return "Color \(index + 1)"
     }
 }

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Tapp logo — exact geometry (center 512,512). Diagonal along y=x through stick corners. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Tapp logo">
+  <rect width="1024" height="1024" fill="#000000"/>
+  <g fill="#FFFFFF" transform="translate(512 512)">
+    <!-- w=36 h=360, centers x ? {-81,-27,27,81} -->
+    <rect x="-99" y="-180" width="36" height="360" rx="18" ry="18"/>
+    <rect x="-45" y="-180" width="36" height="360" rx="18" ry="18"/>
+    <rect x="9" y="-180" width="36" height="360" rx="18" ry="18"/>
+    <rect x="63" y="-180" width="36" height="360" rx="18" ry="18"/>
+    <!-- Diagonal from (-81,-81) to (81,81) in y-up coords ? length 114.55*sqrt(2) -->
+    <rect x="-18" y="-81.058" width="36" height="162.116" rx="18" ry="18" transform="rotate(45)"/>
+  </g>
+</svg>

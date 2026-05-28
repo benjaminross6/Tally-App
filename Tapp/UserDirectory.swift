@@ -15,6 +15,7 @@ struct UserSummary: Equatable {
     var uid: String
     var name: String
     var username: String
+    var avatarColorHex: String?
 
     var displayUsername: String {
         username.isEmpty ? "user" : "@\(username)"
@@ -55,7 +56,8 @@ final class UserDirectory {
             guard snap.exists else { return nil }
             let name = (snap.data()?["Name"] as? String) ?? ""
             let username = (snap.data()?["Username"] as? String) ?? ""
-            let summary = UserSummary(uid: uid, name: name, username: username)
+            let avatarColorHex = snap.data()?["AvatarColor"] as? String
+            let summary = UserSummary(uid: uid, name: name, username: username, avatarColorHex: avatarColorHex)
             summaries[uid] = summary
             return summary
         } catch {
@@ -89,12 +91,3 @@ final class UserDirectory {
     }
 }
 
-extension UserSummary {
-    /// Deterministic SwiftUI-friendly hue from uid, for the avatar background.
-    var avatarHue: Double {
-        var hasher = Hasher()
-        hasher.combine(uid)
-        let raw = abs(hasher.finalize())
-        return Double(raw % 360) / 360.0
-    }
-}

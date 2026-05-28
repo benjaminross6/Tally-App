@@ -152,8 +152,11 @@ struct AvatarBadge: View {
     }
 
     private var backgroundColor: Color {
-        guard let hue = summary?.avatarHue else { return Color.gray }
-        return Color(hue: hue, saturation: 0.55, brightness: 0.75)
+        if let uid = summary?.uid, let hex = summary?.avatarColorHex, !hex.isEmpty {
+            return AvatarColorAssignment.color(for: uid, hex: hex)
+        }
+        guard let uid = summary?.uid else { return Color.gray }
+        return AvatarColorAssignment.color(for: uid)
     }
 }
 

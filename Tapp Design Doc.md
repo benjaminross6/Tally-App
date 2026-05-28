@@ -28,7 +28,7 @@ Stored in Firestore. Fields use the casing already present in the codebase.
 
 - `Name` : String — display name shown next to the user in friends and tally owner rows.
 - `Username` : String — unique, lowercase, `[a-z0-9_]{3,20}`. Claimed at signup. Used by friends to add you. Unique across all users.
-- `Email` : String — user-entered email.
+- `Email` : String — synthetic `username@tapp.users` at signup; may be changed later in Settings to a real address.
 - `Joined` : Timestamp — server time at signup.
 - `Tallies` : Array<Reference> — refs to documents in `tallies`. Includes tallies the user owns and tallies shared with them.
 - `Friends` : Array<Reference> — refs to other `users` documents.
@@ -41,7 +41,7 @@ Stored in Firestore. Fields use the casing already present in the codebase.
 - `Name` : String — tally name. ≤ 40 characters.
 - `Count` : Int64 — current count. Can be negative.
 - `Owner` : Reference — ref to the user who created the tally.
-- `SharedWith` : Array<Reference> — refs to users the tally is shared with (does not include the owner).
+- `Shared With` : Array<Reference> — refs to users the tally is shared with (does not include the owner). (Firestore field name includes a space.)
 - `Permissions` : Map<String, String> — `uid` → `"view"` | `"edit"`. Owner is implicit and not present in the map. A user in `SharedWith` must have an entry here.
 - `Created` : Timestamp — server time at creation.
 - `LastUpdated` : Timestamp — server time of the most recent write to any field on this tally.
@@ -52,9 +52,9 @@ Stored in Firestore. Fields use the casing already present in the codebase.
 
 ### Stored only on the device (UserDefaults)
 
-- `tallyColor[tallyId]` : Color — the local color this user has picked for this tally. Defaults to the app accent color. Not synced; this is what "color is local" means.
-- `lastSortMode` : String — the home page's last selected sort/filter mode.
-- `lastSeenTallyUpdates[tallyId]` : Timestamp — used to decide which "someone updated this tally" avatars to flash on next launch.
+- `tapp.tallyColorIndex.<tallyId>` : Int — palette swatch index for this tally on this device (`nil`/absent = Default accent). Not synced.
+- `tapp.sortEnabled.<userId>` : Bool — when true, home list sorts by `LastUpdated` (desc); when false, by `Created` (desc).
+- `tapp.lastSeenTallyUpdates.<userId>.<tallyId>` : Timestamp — last `LastUpdated` the user saw; drives the landing updater-avatar flash.
 
 ## Permissions
 
@@ -95,21 +95,21 @@ Signup / Login  →  Home  ⇄  Full Screen Tally
 
 ### Signup
 
-Single screen with three fields: **Name**, **Username**, **Email**. (Authentication itself uses Firebase Anonymous Auth in the current build; the username + email become claims on the resulting `users/{uid}` document.) Submit is disabled until all three validate:
+Single screen with **Name**, **Username**, and **Password** (plus confirm password). Firebase Auth uses **Email/Password** with a synthetic email `username@tapp.users` — users never type an email at signup. Submit is disabled until all fields validate:
 
 - Name: 1–40 characters.
 - Username: matches `^[a-z0-9_]{3,20}$` and not already claimed.
-- Email: matches a basic email regex.
+- Password: at least 6 characters; must match confirmation.
 
-On submit: create the anonymous Firebase user, write `users/{uid}` with the entered fields plus an `AvatarColor` chosen from a fixed 12-color palette by hashing the uid, plus `Joined = serverTimestamp()`, `Tallies = []`, `Friends = []`, `NumberType = "arabic"`, `Theme = "system"`. On success, route to Home.
+On submit: create the Firebase user, claim `usernames/{username}`, write `users/{uid}` with `Name`, `Username`, synthetic `Email`, `AvatarColor` (from a fixed 12-color palette by uid hash), `Joined = serverTimestamp()`, `Tallies = []`, `Friends = []`, `NumberType = "arabic"`, `Theme = "system"`. Route to Home.
 
 ### Returning user
 
-`RootView` switches on `AuthStore.state`. If the keychain still holds the anonymous credential, the profile doc is fetched and the user lands on Home. Otherwise they land on Signup.
+`SignupView` is the signed-out landing screen; **Already have an account? Log in** opens `LoginView` (username + password). If Firebase still has a session, `AuthStore` loads the profile and `RootView` routes straight to Home.
 
 ### Log out
 
-From Settings → Log Out. Confirms, then clears the Firebase session. Lands on Signup. The local color/sort preferences in UserDefaults are kept.
+From Settings → Log Out. Confirms ("Log out of Tapp?"), then signs out. Lands on `SignupView`. Local UserDefaults (colors, sort, last-seen) are kept.
 
 ### Delete account
 
@@ -158,14 +158,12 @@ On Create, write a `tallies/{id}` document with `Owner = current user`, `Count =
 
 #### Sort
 
-The sort button is small, circular, and shows three bars. It fits between the left edge of the screen and the right edge of the add tally button. Tapping it cycles through four modes, in order:
+The sort button is a small circular control with three bars, to the left of the add tally button. Tapping it **toggles** between two orderings (persisted per user in `tapp.sortEnabled.<userId>`):
 
-1. **Last updated** (default; descending by `LastUpdated`).
-2. **Newest** (descending by `Created`).
-3. **Oldest** (ascending by `Created`).
-4. **My tallies only** (filter: `Owner == current user`; within this view, sorted by `LastUpdated` descending).
+1. **Last updated** (`sortEnabled == true`) — descending by `LastUpdated`, then `Created`.
+2. **Created** (`sortEnabled == false`) — descending by `Created`.
 
-The current mode is shown as a small label that fades in for 1.5 seconds under the sort button after each tap, then fades out. The chosen mode is persisted to UserDefaults and restored on next launch.
+When active, the button uses the accent fill. After each tap, a small label ("Last updated" or "Created") fades in for 1.5 seconds under the button, then fades out. The list reorders once on toggle; live snapshot updates do not reshuffle rows (only count/name data updates in place).
 
 #### Tally (row)
 
@@ -208,7 +206,7 @@ The count is itself the button. Tapping it increments by 1 (see above). Long-pre
 
 #### Color
 
-A small circular button rendered as a color wheel / gradient. Tapping it shows a popover with a fixed 12-color palette plus a "Default (Accent)" swatch. The choice writes to UserDefaults under `tallyColor[tallyId]`. **This color is local:** only this user, and only on this device, sees it. It is not synced.
+A small circular button rendered as a color wheel / gradient. Tapping it shows a popover with a fixed 12-color palette plus a "Default (Accent)" swatch. The choice writes to UserDefaults under `tapp.tallyColorIndex.<tallyId>`. **This color is local:** only this user, and only on this device, sees it. It is not synced.
 
 #### Friends and Permissions
 
@@ -288,11 +286,11 @@ Opens an inline editor, then routes through Firebase Auth's email update flow. O
 
 #### Password (Change)
 
-In the current Anonymous Auth build, this button is hidden. When auth is upgraded to email/password, tapping opens a sheet that asks for the current password and a new password, then calls Firebase Auth's password change. (No "forgot password" link here; that lives on the login screen.)
+Tapping opens a sheet for **current password** and **new password** (with confirmation). Reauthenticates via Firebase, then calls `updatePassword`. No "forgot password" link here (future login-screen feature).
 
 #### Friends — row
 
-Tapping a friend row reveals two actions: **Cancel** and a red **Remove friend**. On Remove:
+Swipe left on a friend row for **Remove**. Confirm in the alert. On Remove:
 
 1. `arrayRemove` each user from the other's `Friends`.
 2. For every tally currently owned by either user that lists the other in `SharedWith`, `arrayRemove` the other user from `SharedWith` and remove their `Permissions` entry, and `arrayRemove` the tally ref from the other user's `Tallies`.
@@ -312,15 +310,15 @@ Friends are not optional: the added user does not get a request or a chance to r
 
 #### Numbers
 
-A box to the right of "Numbers:" displaying the current type. Tapping it cycles through **Arabic → Roman → Stick → Arabic**. Choice is written to `NumberType` and applies to every count this user sees, everywhere in the app.
+A tappable value box beside "Numbers:" showing the current type (e.g. "Arabic"). Tapping cycles **Arabic → Roman → Stick → Arabic** and writes `NumberType`.
 
-- **Arabic:** standard base-10 digits (`0`, `1`, `42`, `-7`, `1234`).
-- **Roman:** classic Roman numerals. `0` displays as `N` (nulla). Values above 3999 use vinculum notation (overline = ×1000). Negative values are prefixed with `-`.
-- **Stick:** tally marks in groups of 5 (four vertical strokes with a diagonal slash on the fifth). `0` displays as a single dot. Negative values are prefixed with `-`. Wraps onto multiple lines if needed.
+- **Arabic:** base-10 digits (`0`, `1`, `42`, `-7`).
+- **Roman:** classic numerals; `0` → `N`; above 3999 uses vinculum (overline = ×1000); negatives prefixed with `-`.
+- **Stick:** custom-drawn tally groups (`StickTallyView`) — four rounded verticals plus a diagonal on the fifth, matching the app icon geometry. `0` is a dot; negatives prefixed with `-`. Groups wrap in a grid; on tight home rows, only as many groups as fit are shown and the true count appears in small Arabic beside them. VoiceOver always speaks the numeric count.
 
 #### Theme
 
-A box to the right of "Theme:" displaying the current theme. Tapping it cycles through **System → Light → Dark → System**. Choice is written to `Theme` and applied immediately via the SwiftUI environment.
+A tappable value box beside "Theme:" (e.g. "System"). Tapping cycles **System → Light → Dark → System**, writes `Theme`, and applies `.preferredColorScheme` immediately.
 
 #### Log Out
 
@@ -336,7 +334,7 @@ A bright red box reading "Delete Account." Tapping prompts a confirmation alert.
 - **Increments.** Always use Firestore's atomic `FieldValue.increment(1)`. Two users tapping at the same time both count; no taps are lost.
 - **Other writes.** `Name`, `FireworksEnabled`, `ResetSchedule`, `Permissions`, `SharedWith`, direct `Count` overwrites, and friend mutations are plain Firestore writes. Last write wins; the app does not detect or surface conflicts.
 - **Offline.** Firestore's offline cache serves reads and queues writes. The UI behaves the same online or offline; queued writes flush automatically on reconnect.
-- **Avatars-on-landing.** The "recent updater" avatar logic uses `lastSeenTallyUpdates[tallyId]` in UserDefaults: on each launch, for every tally where `LastUpdated > lastSeenTallyUpdates[tallyId]` and `LastUpdatedBy != current user`, flash the updater's avatar; then set `lastSeenTallyUpdates[tallyId] = LastUpdated`.
+- **Avatars-on-landing.** Uses `tapp.lastSeenTallyUpdates.<userId>.<tallyId>`: on each home appearance (after tallies load), for every tally where `LastUpdated` is newer than last seen and `LastUpdatedBy` is another user, flash that updater's avatar (~2 s fade), then record last seen. If `FireworksEnabled`, also play landing fireworks (max 3 concurrent).
 
 ## Accessibility
 

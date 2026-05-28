@@ -28,14 +28,24 @@ struct TappApp: App {
 private struct RootView: View {
     @Environment(AuthStore.self) private var authStore
 
-    var body: some View {
-        switch authStore.state {
-        case .loading:
-            ProgressView()
-        case .signedOut:
-            SignupView()
-        case .signedIn(let profile):
-            TalliesView(profile: profile)
+    private var preferredColorScheme: ColorScheme? {
+        if case .signedIn(let profile) = authStore.state {
+            return UserPreferences.colorScheme(for: profile.resolvedTheme)
         }
+        return nil
+    }
+
+    var body: some View {
+        Group {
+            switch authStore.state {
+            case .loading:
+                ProgressView()
+            case .signedOut:
+                SignupView()
+            case .signedIn(let profile):
+                TalliesView(profile: profile)
+            }
+        }
+        .preferredColorScheme(preferredColorScheme)
     }
 }

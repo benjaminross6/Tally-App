@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import UIKit
 import FirebaseFirestore
 
 struct SettingsView: View {
@@ -25,7 +26,7 @@ struct SettingsView: View {
     @State private var editingField: EditableField?
 
     private enum EditableField: String, Identifiable {
-        case username, name, password
+        case username, name, email, password
         var id: String { rawValue }
     }
 
@@ -52,7 +53,7 @@ struct SettingsView: View {
             editorSheet(for: field)
         }
         .confirmationDialog(
-            "Log out?",
+            "Log out of Tapp?",
             isPresented: $showingLogOutConfirm,
             titleVisibility: .visible
         ) {
@@ -117,6 +118,9 @@ struct SettingsView: View {
             settingRow(label: "Name", value: currentProfile.name) {
                 editingField = .name
             }
+            settingRow(label: "Email", value: currentProfile.email) {
+                editingField = .email
+            }
             settingRow(label: "Password", value: "••••••••") {
                 editingField = .password
             }
@@ -126,7 +130,7 @@ struct SettingsView: View {
     private var friendsSection: some View {
         Section {
             if friendsStore.friendRefs.isEmpty {
-                Text("No friends yet. Tap Add Friend to add one by username.")
+                Text("No friends yet. Tap **Add Friend** to add one by username.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else {
@@ -157,21 +161,33 @@ struct SettingsView: View {
 
     private var preferencesSection: some View {
         Section("Preferences") {
-            HStack {
-                Text("Numbers")
-                Spacer()
-                Text("Arabic")
-                    .foregroundStyle(.secondary)
+            preferenceCycleRow(
+                label: "Numbers",
+                value: UserPreferences.numberTypeLabel(currentProfile.resolvedNumberType)
+            ) {
+                Task {
+                    do {
+                        try await authStore.cycleNumberType()
+                    } catch {
+                        toastMessage = error.localizedDescription
+                    }
+                }
             }
-            .accessibilityHint("Roman and Stick number formats arrive in a later release.")
+            .accessibilityHint("Cycles Arabic, Roman, and Stick number formats.")
 
-            HStack {
-                Text("Theme")
-                Spacer()
-                Text("System")
-                    .foregroundStyle(.secondary)
+            preferenceCycleRow(
+                label: "Theme",
+                value: UserPreferences.themeLabel(currentProfile.resolvedTheme)
+            ) {
+                Task {
+                    do {
+                        try await authStore.cycleTheme()
+                    } catch {
+                        toastMessage = error.localizedDescription
+                    }
+                }
             }
-            .accessibilityHint("Light and Dark themes arrive in a later release.")
+            .accessibilityHint("Cycles System, Light, and Dark appearance.")
         }
     }
 
@@ -185,19 +201,46 @@ struct SettingsView: View {
     }
 
     private var deleteSection: some View {
-        Section {
-            Button(role: .destructive) {
-                showingDeleteFirstConfirm = true
-            } label: {
-                Text("Delete Account")
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 4)
+        Group {
+            Section {
+                Color.clear
+                    .frame(height: 96)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .accessibilityHidden(true)
             }
+
+            Section {
+                Button(role: .destructive) {
+                    showingDeleteFirstConfirm = true
+                } label: {
+                    Text("Delete Account")
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.vertical, 4)
+                }
+            }
+            .listRowBackground(Color.red.opacity(0.1))
         }
-        .listRowBackground(Color.red.opacity(0.1))
     }
 
     // MARK: - Helpers
+
+    private func preferenceCycleRow(label: String, value: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(label)
+                    .foregroundStyle(.primary)
+                Spacer()
+                Text(value)
+                    .foregroundStyle(.primary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color(.secondarySystemBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+        }
+        .buttonStyle(.plain)
+    }
 
     @ViewBuilder
     private func settingRow(label: String, value: String, change: @escaping () -> Void) -> some View {
@@ -239,9 +282,19 @@ struct SettingsView: View {
             ) { newValue in
                 try await authStore.changeName(newValue)
             }
+        case .email:
+            InlineEditorSheet(
+                title: "Change email",
+                placeholder: "you@example.com",
+                initial: currentProfile.email,
+                helpText: "Used for sign-in with Firebase Auth.",
+                keyboardType: .emailAddress
+            ) { newValue in
+                try await authStore.changeEmail(newValue)
+            }
         case .password:
-            PasswordEditorSheet { newPassword in
-                try await authStore.changePassword(newPassword)
+            PasswordEditorSheet { currentPassword, newPassword in
+                try await authStore.changePassword(current: currentPassword, new: newPassword)
             }
         }
     }
@@ -386,6 +439,7 @@ private struct InlineEditorSheet: View {
     let placeholder: String
     let initial: String
     let helpText: String?
+    let keyboardType: UIKeyboardType
     let sanitize: ((String) -> String)?
     let onSave: (String) async throws -> Void
 
@@ -399,6 +453,7 @@ private struct InlineEditorSheet: View {
         placeholder: String,
         initial: String,
         helpText: String? = nil,
+        keyboardType: UIKeyboardType = .default,
         sanitize: ((String) -> String)? = nil,
         onSave: @escaping (String) async throws -> Void
     ) {
@@ -406,6 +461,7 @@ private struct InlineEditorSheet: View {
         self.placeholder = placeholder
         self.initial = initial
         self.helpText = helpText
+        self.keyboardType = keyboardType
         self.sanitize = sanitize
         self.onSave = onSave
         _value = State(initialValue: initial)
@@ -416,8 +472,9 @@ private struct InlineEditorSheet: View {
             VStack(alignment: .leading, spacing: 16) {
                 TextField(placeholder, text: $value)
                     .textFieldStyle(.roundedBorder)
+                    .keyboardType(keyboardType)
                     .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
+                    .textInputAutocapitalization(keyboardType == .emailAddress ? .never : .words)
                     .onChange(of: value) { _, newValue in
                         if let sanitize { value = sanitize(newValue) }
                     }
@@ -469,9 +526,10 @@ private struct InlineEditorSheet: View {
 }
 
 private struct PasswordEditorSheet: View {
-    let onSave: (String) async throws -> Void
+    let onSave: (_ currentPassword: String, _ newPassword: String) async throws -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @State private var currentPassword: String = ""
     @State private var password: String = ""
     @State private var confirmPassword: String = ""
     @State private var errorMessage: String?
@@ -480,6 +538,11 @@ private struct PasswordEditorSheet: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
+                SecureField("Current password", text: $currentPassword)
+                    .textFieldStyle(.roundedBorder)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+
                 SecureField("New password", text: $password)
                     .textFieldStyle(.roundedBorder)
                     .textInputAutocapitalization(.never)
@@ -520,7 +583,7 @@ private struct PasswordEditorSheet: View {
     }
 
     private var isValid: Bool {
-        password.count >= 6 && password == confirmPassword
+        !currentPassword.isEmpty && password.count >= 6 && password == confirmPassword
     }
 
     private func save() {
@@ -528,7 +591,7 @@ private struct PasswordEditorSheet: View {
         errorMessage = nil
         Task {
             do {
-                try await onSave(password)
+                try await onSave(currentPassword, password)
                 dismiss()
             } catch {
                 errorMessage = error.localizedDescription

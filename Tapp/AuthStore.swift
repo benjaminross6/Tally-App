@@ -151,10 +151,65 @@ final class AuthStore {
         state = .signedIn(profile)
     }
 
-    func changePassword(_ newPassword: String) async throws {
+    func changePassword(current currentPassword: String, new newPassword: String) async throws {
         guard isValidPassword(newPassword) else { throw AuthError.invalidPassword }
+        guard !currentPassword.isEmpty else { throw AuthError.invalidPassword }
         guard let user = Auth.auth().currentUser else { throw AuthError.notSignedIn }
+
+        let email = user.email ?? {
+            if case .signedIn(let profile) = state { return profile.email }
+            return ""
+        }()
+        guard !email.isEmpty else { throw AuthError.notSignedIn }
+
+        let credential = EmailAuthProvider.credential(withEmail: email, password: currentPassword)
+        try await user.reauthenticate(with: credential)
         try await user.updatePassword(to: newPassword)
+    }
+
+    func changeEmail(_ newEmail: String) async throws {
+        let trimmed = newEmail.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard isValidEmail(trimmed) else { throw AuthError.invalidEmail }
+        guard let user = Auth.auth().currentUser else { throw AuthError.notSignedIn }
+        guard case .signedIn(var profile) = state else { throw AuthError.notSignedIn }
+        guard trimmed != profile.email.lowercased() else { return }
+
+        try await user.updateEmail(to: trimmed)
+        try await Firestore.firestore()
+            .collection("users")
+            .document(user.uid)
+            .updateData(["Email": trimmed])
+
+        profile.email = trimmed
+        state = .signedIn(profile)
+    }
+
+    func cycleNumberType() async throws {
+        guard let uid = Auth.auth().currentUser?.uid else { throw AuthError.notSignedIn }
+        guard case .signedIn(var profile) = state else { throw AuthError.notSignedIn }
+
+        let next = UserPreferences.nextNumberType(after: profile.resolvedNumberType)
+        try await Firestore.firestore()
+            .collection("users")
+            .document(uid)
+            .updateData(["NumberType": next])
+
+        profile.numberType = next
+        state = .signedIn(profile)
+    }
+
+    func cycleTheme() async throws {
+        guard let uid = Auth.auth().currentUser?.uid else { throw AuthError.notSignedIn }
+        guard case .signedIn(var profile) = state else { throw AuthError.notSignedIn }
+
+        let next = UserPreferences.nextTheme(after: profile.resolvedTheme)
+        try await Firestore.firestore()
+            .collection("users")
+            .document(uid)
+            .updateData(["Theme": next])
+
+        profile.theme = next
+        state = .signedIn(profile)
     }
 
     func deleteAccount() async throws {
@@ -277,7 +332,10 @@ final class AuthStore {
             "Email": email,
             "Joined": FieldValue.serverTimestamp(),
             "Tallies": [DocumentReference](),
-            "Friends": [DocumentReference]()
+            "Friends": [DocumentReference](),
+            "NumberType": UserNumberType.arabic,
+            "Theme": UserTheme.system,
+            "AvatarColor": AvatarColorAssignment.hex(for: uid)
         ])
     }
 
@@ -295,12 +353,19 @@ final class AuthStore {
     private func isValidPassword(_ password: String) -> Bool {
         password.count >= 6
     }
+
+    private func isValidEmail(_ email: String) -> Bool {
+        let parts = email.split(separator: "@", omittingEmptySubsequences: false)
+        guard parts.count == 2, !parts[0].isEmpty, parts[1].contains(".") else { return false }
+        return true
+    }
 }
 
 enum AuthError: LocalizedError {
     case profileNotFound
     case invalidName
     case invalidPassword
+    case invalidEmail
     case wrongCredentials
     case notSignedIn
 
@@ -312,6 +377,8 @@ enum AuthError: LocalizedError {
             return "Please enter your name (up to 40 characters)."
         case .invalidPassword:
             return "Passwords must be at least 6 characters."
+        case .invalidEmail:
+            return "Please enter a valid email address."
         case .wrongCredentials:
             return "That username or password isn't right."
         case .notSignedIn:

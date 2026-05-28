@@ -19,6 +19,10 @@ struct Tally: Codable, Identifiable {
     var lastUpdatedBy: DocumentReference?
     /// `uid -> "view" | "edit"`. The owner is implicit and is not present in this map.
     var permissions: [String: String]?
+    var fireworksEnabled: Bool?
+    /// `off` | `daily` | `monthly` | `yearly`
+    var resetSchedule: String?
+    var nextResetAt: Date?
 
     enum CodingKeys: String, CodingKey {
         case name = "Name"
@@ -29,10 +33,22 @@ struct Tally: Codable, Identifiable {
         case lastUpdated = "LastUpdated"
         case lastUpdatedBy = "LastUpdatedBy"
         case permissions = "Permissions"
+        case fireworksEnabled = "FireworksEnabled"
+        case resetSchedule = "ResetSchedule"
+        case nextResetAt = "NextResetAt"
     }
 
     var sharedRefs: [DocumentReference] { sharedWith ?? [] }
     var perms: [String: String] { permissions ?? [:] }
+    var effectiveFireworksEnabled: Bool { fireworksEnabled ?? false }
+    var effectiveResetSchedule: String { resetSchedule ?? TallyResetSchedule.off }
+}
+
+enum TallyResetSchedule {
+    static let off = "off"
+    static let daily = "daily"
+    static let monthly = "monthly"
+    static let yearly = "yearly"
 }
 
 extension Tally: Equatable {
@@ -46,6 +62,9 @@ extension Tally: Equatable {
             && lhs.lastUpdated == rhs.lastUpdated
             && lhs.lastUpdatedBy?.path == rhs.lastUpdatedBy?.path
             && lhs.perms == rhs.perms
+            && lhs.effectiveFireworksEnabled == rhs.effectiveFireworksEnabled
+            && lhs.effectiveResetSchedule == rhs.effectiveResetSchedule
+            && lhs.nextResetAt == rhs.nextResetAt
     }
 }
 

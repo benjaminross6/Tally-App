@@ -3,15 +3,15 @@
 //  Tapp
 //
 //  Per-tally screen: huge tap area for incrementing, plus inline editors for
-//  name and count, plus the bottom button row (Color, Friends and Permissions,
-//  Delete). Owner-only buttons are hidden for non-owners; view-only users get
-//  a shake on tap.
+//  name and count, plus the bottom button row (Color, Friends, Resets,
+//  Fireworks, Delete). Owner-only buttons are hidden for non-owners.
 //
 
 import SwiftUI
 import FirebaseFirestore
 
 struct FullScreenTallyView: View {
+    let profile: UserProfile
     let initialTally: Tally
     let store: TallyStore
     let friendsStore: FriendsStore
@@ -23,16 +23,22 @@ struct FullScreenTallyView: View {
     @State private var isEditingName: Bool = false
     @State private var isEditingCount: Bool = false
     @State private var nudge: Int = 0
+    @State private var fireworksPlayback = FireworksPlayback()
 
     @State private var showingColor: Bool = false
     @State private var showingPermissions: Bool = false
+    @State private var showingResets: Bool = false
     @State private var showingDeleteConfirm: Bool = false
+    @State private var isTogglingFireworks: Bool = false
 
     @State private var backgroundTint: Color = .accentColor.opacity(0.18)
     @State private var errorMessage: String?
 
     @FocusState private var nameFieldFocused: Bool
     @FocusState private var countFieldFocused: Bool
+
+    @ScaledMetric(relativeTo: .largeTitle) private var arabicCountFontSize: CGFloat = 120
+    @ScaledMetric(relativeTo: .title) private var stickDisplayMaxHeight: CGFloat = 220
 
     private var currentTally: Tally {
         store.tallies.first(where: { $0.id == initialTally.id }) ?? initialTally
@@ -44,27 +50,28 @@ struct FullScreenTallyView: View {
 
     private var tallyId: String { currentTally.id ?? "" }
 
+    private var numberType: String { profile.resolvedNumberType }
+
+    private var countDisplayText: String {
+        CountFormatter.string(for: currentTally.count, numberType: numberType)
+    }
+
+    private var isStickCount: Bool { numberType == UserNumberType.stick }
+
     var body: some View {
         ZStack {
             backgroundTint
                 .ignoresSafeArea()
 
+            FireworksOverlay(playback: fireworksPlayback)
+
             VStack(spacing: 0) {
                 topBar
-                Spacer(minLength: 0)
-                nameView
-                    .padding(.bottom, 12)
-                countView
-                    .padding(.bottom, 12)
-                Spacer(minLength: 0)
+                incrementArea
                 bottomButtonRow
                     .padding(.bottom, 24)
             }
             .padding(.horizontal, 24)
-        }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            handleIncrementTap()
         }
         .gesture(
             DragGesture(minimumDistance: 30)
@@ -85,6 +92,9 @@ struct FullScreenTallyView: View {
         .sheet(isPresented: $showingPermissions) {
             permissionsSheet
         }
+        .sheet(isPresented: $showingResets) {
+            TallyResetSheet(tally: currentTally, store: store)
+        }
         .alert(deleteAlertTitle, isPresented: $showingDeleteConfirm) {
             Button("Cancel", role: .cancel) {}
             Button(deleteAlertButton, role: .destructive) {
@@ -97,6 +107,26 @@ struct FullScreenTallyView: View {
             Button("OK", role: .cancel) { errorMessage = nil }
         } message: {
             Text(errorMessage ?? "")
+        }
+    }
+
+    private var incrementArea: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            nameView
+                .padding(.bottom, 12)
+            countView
+                .padding(.bottom, 12)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Increment")
+        .accessibilityValue(TallyAccessibility.countDescription(count: currentTally.count, numberType: numberType))
+        .accessibilityHint(role.canIncrement ? "Double tap to add one." : "View only.")
+        .onTapGesture {
+            handleIncrementTap()
         }
     }
 
@@ -153,7 +183,16 @@ struct FullScreenTallyView: View {
                 .lineLimit(2)
                 .minimumScaleFactor(0.6)
                 .padding(.horizontal, 8)
-                .onLongPressGesture(minimumDuration: 0.4) {
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction(named: "Edit Name") {
+                    guard role.canRename else {
+                        triggerShake()
+                        return
+                    }
+                    impactLight()
+                    isEditingName = true
+                }
+                .onLongPressGesture(minimumDuration: TappDesignMetrics.longPressDuration) {
                     guard role.canRename else {
                         triggerShake()
                         return
@@ -194,22 +233,54 @@ struct FullScreenTallyView: View {
                     draftCount = String(currentTally.count)
                     countFieldFocused = true
                 }
+        } else if isStickCount {
+            GeometryReader { geometry in
+                StickTallyView(
+                    count: currentTally.count,
+                    style: .fullScreen(
+                        maxWidth: geometry.size.width,
+                        maxHeight: stickDisplayMaxHeight
+                    )
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 80, maxHeight: stickDisplayMaxHeight)
+            .padding(.horizontal, 8)
+            .shake(times: nudge)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction(named: "Edit Count") {
+                beginEditingCount()
+            }
+            .onLongPressGesture(minimumDuration: TappDesignMetrics.longPressDuration) {
+                beginEditingCount()
+            }
         } else {
-            Text("\(currentTally.count)")
-                .font(.system(size: 120, weight: .bold).monospacedDigit())
-                .minimumScaleFactor(0.4)
+            Text(countDisplayText)
+                .font(.system(size: arabicCountFontSize, weight: .bold).monospacedDigit())
+                .minimumScaleFactor(0.35)
+                .multilineTextAlignment(.center)
                 .lineLimit(1)
+                .frame(maxWidth: .infinity)
                 .padding(.horizontal, 8)
                 .shake(times: nudge)
-                .onLongPressGesture(minimumDuration: 0.4) {
-                    guard role.canEditCount else {
-                        triggerShake()
-                        return
-                    }
-                    impactLight()
-                    isEditingCount = true
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction(named: "Edit Count") {
+                    beginEditingCount()
+                }
+                .onLongPressGesture(minimumDuration: TappDesignMetrics.longPressDuration) {
+                    beginEditingCount()
                 }
         }
+    }
+
+    private func beginEditingCount() {
+        guard role.canEditCount else {
+            triggerShake()
+            return
+        }
+        impactLight()
+        isEditingCount = true
     }
 
     private func commitCount() {
@@ -220,6 +291,7 @@ struct FullScreenTallyView: View {
         Task {
             do {
                 try await store.setCount(currentTally, to: value)
+                triggerFireworksIfEnabled()
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -229,14 +301,7 @@ struct FullScreenTallyView: View {
     // MARK: - Bottom buttons
 
     private var bottomButtonRow: some View {
-        HStack(spacing: 24) {
-            circleButton(
-                systemImage: store.isPinned(tallyId) ? "pin.fill" : "pin",
-                label: store.isPinned(tallyId) ? "Unpin from home" : "Pin on home"
-            ) {
-                store.togglePin(tallyId: tallyId)
-            }
-
+        HStack(spacing: 12) {
             circleButton(systemImage: "paintpalette.fill", label: "Color") {
                 showingColor = true
             }
@@ -245,13 +310,39 @@ struct FullScreenTallyView: View {
                 circleButton(systemImage: "person.2.fill", label: "Friends and Permissions") {
                     showingPermissions = true
                 }
+
+                circleButton(systemImage: "clock.fill", label: "One-time or scheduled resets") {
+                    showingResets = true
+                }
+
+                fireworksButton
             }
 
             circleButton(systemImage: "trash.fill", label: deleteAccessibilityLabel) {
                 showingDeleteConfirm = true
             }
         }
-        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity)
+    }
+
+    private var fireworksButton: some View {
+        let enabled = currentTally.effectiveFireworksEnabled
+        return Button {
+            toggleFireworks()
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(enabled ? Color.accentColor : Color(.tertiarySystemBackground))
+                    .frame(width: TappDesignMetrics.circularControlSize, height: TappDesignMetrics.circularControlSize)
+                Image(systemName: "sparkles")
+                    .font(.system(size: TappDesignMetrics.circularControlIconSize, weight: .semibold))
+                    .foregroundStyle(enabled ? Color.white : Color.primary)
+            }
+        }
+        .disabled(isTogglingFireworks)
+        .accessibilityLabel("Fireworks")
+        .accessibilityValue(enabled ? "On" : "Off")
+        .accessibilityHint("Double tap to toggle fireworks on increments")
     }
 
     @ViewBuilder
@@ -260,13 +351,27 @@ struct FullScreenTallyView: View {
             ZStack {
                 Circle()
                     .fill(Color(.tertiarySystemBackground))
-                    .frame(width: 48, height: 48)
+                    .frame(width: TappDesignMetrics.circularControlSize, height: TappDesignMetrics.circularControlSize)
                 Image(systemName: systemImage)
-                    .font(.system(size: 20, weight: .semibold))
+                    .font(.system(size: TappDesignMetrics.circularControlIconSize, weight: .semibold))
                     .foregroundStyle(.primary)
             }
         }
         .accessibilityLabel(label)
+    }
+
+    private func toggleFireworks() {
+        guard role.isOwner else { return }
+        isTogglingFireworks = true
+        let next = !currentTally.effectiveFireworksEnabled
+        Task {
+            do {
+                try await store.setFireworksEnabled(currentTally, enabled: next)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isTogglingFireworks = false
+        }
     }
 
     // MARK: - Permissions sheet
@@ -291,10 +396,16 @@ struct FullScreenTallyView: View {
         Task {
             do {
                 try await store.increment(currentTally)
+                triggerFireworksIfEnabled()
             } catch {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    private func triggerFireworksIfEnabled() {
+        guard currentTally.effectiveFireworksEnabled else { return }
+        fireworksPlayback.trigger()
     }
 
     private func triggerShake() {
